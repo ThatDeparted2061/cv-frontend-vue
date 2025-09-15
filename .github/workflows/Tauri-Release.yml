@@ -17,9 +17,9 @@ on:
         default: 'patch'
         type: choice
         options:
-          - patch
-          - minor
-          - major
+        - patch
+        - minor
+        - major
 
 jobs:
   build-tauri:
@@ -37,14 +37,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          # Use setup-node's built-in caching for simplicity and correctness
-          cache: 'npm'
+
+      - name: Cache Node.js Dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
 
       - name: Install Dependencies
         run: npm install
+        shell: bash
 
       - name: Run Cross-Platform Build Script
         run: node build-desktop.js
+        shell: bash
 
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -52,27 +59,30 @@ jobs:
       - name: Install Linux Dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
+          sudo apt update
+          sudo apt install libwebkit2gtk-4.1-dev \
+          build-essential \
+          curl \
+          wget \
+          file \
+          libxdo-dev \
+          libssl-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev
+        shell: bash
 
       - name: Install macOS Dependencies
         if: matrix.os == 'macos-latest'
-        run: brew install pkg-config
+        run: |
+          brew update
+          brew install pkg-config
+        shell: bash
 
       - name: Install Windows Dependencies
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
-          # Use 'upgrade' to be idempotent and the correct package name
-          choco upgrade --no-progress -y wixtoolset nsis microsoft-edge-webview2-runtime.evergreen.standalone
+          choco install -y wixtoolset nsis webview2-runtime
 
       - name: Cache Rust Dependencies
         uses: Swatinem/rust-cache@v2
@@ -81,12 +91,14 @@ jobs:
 
       - name: Build Tauri App
         run: npm run tauri build
+        shell: bash
 
       - name: Upload Tauri Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Tauri-Build-Artifacts-${{ matrix.os }}
-          path: src-tauri/target/release/bundle/
+          name: Tauri Build Artifacts (${{ matrix.os }})
+          path: |
+            src-tauri/target/release/bundle
 
   create-release:
     runs-on: ubuntu-latest
@@ -99,7 +111,7 @@ jobs:
 
       - name: Generate Changelog
         id: changelog
-        uses: TriPSs/conventional-changelog-action@v5
+        uses: TriPSs/conventional-changelog-action@v3
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -107,27 +119,33 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          # Merge artifacts from different OS into a single directory
-          merge-multiple: true
 
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets
+          # Move all built files (.deb, .AppImage, .msi, .dmg) into one folder
+          # The '|| true' prevents the workflow from failing if a specific file type doesn't exist
+          find artifacts -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.dmg" \) -exec cp {} release-assets/ \; || true
           
-          # Move primary assets
-          find artifacts -maxdepth 2 -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.dmg" \) -exec mv {} release-assets/ \;
-
-          # Find and zip the macOS .app bundle
-          APP_BUNDLE=$(find artifacts -name "*.app" -type d -maxdepth 2 | head -n 1)
-          if [[ -d "$APP_BUNDLE" ]]; then
-            APP_NAME=$(basename "$APP_BUNDLE" .app)
-            pushd "$(dirname "$APP_BUNDLE")"
-            zip -r "../../release-assets/${APP_NAME}.zip" "$(basename "$APP_BUNDLE")"
-            popd
+          if [ -d "artifacts/Tauri Build Artifacts (macos-latest)/src-tauri/target/release/bundle/macos" ]; then
+            cd "artifacts/Tauri Build Artifacts (macos-latest)/src-tauri/target/release/bundle/macos"
+            for app in *.app; do
+              zip -r "../../../release-assets/${app%.app}.zip" "$app"
+            done
+            cd -
           fi
           
           echo "Prepared release assets:"
           ls -l release-assets/
+
+      - name: Install GitHub CLI
+        run: |
+          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+          && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+          && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+          && sudo apt update \
+          && sudo apt install gh -y
 
       - name: Determine New Version and Create GitHub Release
         env:
@@ -136,11 +154,12 @@ jobs:
           # Fetch the latest tag from the repository
           LATEST_TAG=$(git tag --sort=-v:refname | head -n 1)
           if [[ -z "$LATEST_TAG" ]]; then
-            LATEST_TAG="v0.0.0" # Start from v0.0.0 if no tags exist
+            # If no tags exist, start from v0.0.0
+            LATEST_TAG="v0.0.0"
           fi
           
           # Parse the latest tag to get major, minor, and patch numbers
-          if [[ "$LATEST_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+          if [[ "$LATEST_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             MAJOR=${BASH_REMATCH[1]}
             MINOR=${BASH_REMATCH[2]}
             PATCH=${BASH_REMATCH[3]}
@@ -148,7 +167,6 @@ jobs:
             echo "Could not parse latest tag: $LATEST_TAG. Starting from v0.1.0."
             MAJOR=0; MINOR=1; PATCH=0
           fi
-
           # Increment the version based on the manual input
           BUMP_TYPE="${{ github.event.inputs.version-bump }}"
           if [ "$BUMP_TYPE" == "major" ]; then
@@ -159,13 +177,20 @@ jobs:
             PATCH=$((PATCH + 1))
           fi
           
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+          if [ -n "${{ steps.changelog.outputs.tag }}" ]; then
+            NEW_VERSION="${{ steps.changelog.outputs.tag }}"
+            echo "Using tag from changelog output: $NEW_VERSION"
+          else
+            NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+          fi
           echo "Creating new release: $NEW_VERSION"
           
+          # Get the release notes generated by the changelog action
           CHANGELOG_NOTES_FILE="RELEASE_NOTES.md"
           printf "%s\n" "${{ steps.changelog.outputs.changelog }}" > "$CHANGELOG_NOTES_FILE"
           
-          # Use GitHub CLI to create the release
+          # Create the GitHub Release and upload all assets
+          test -n "$(ls -A release-assets 2>/dev/null)" || { echo "No assets to upload"; exit 1; }
           gh release create "$NEW_VERSION" \
             --title "CircuitVerse Desktop $NEW_VERSION" \
             --notes-file "$CHANGELOG_NOTES_FILE" \
