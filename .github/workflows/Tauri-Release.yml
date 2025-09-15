@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-2022, macos-latest]
 
     steps:
       - name: Checkout repository
@@ -79,7 +79,7 @@ jobs:
         shell: bash
 
       - name: Install Windows Dependencies
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2022'
         shell: powershell
         run: |
           choco install -y wixtoolset nsis webview2-runtime
