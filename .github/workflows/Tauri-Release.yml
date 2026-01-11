@@ -120,7 +120,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 18
 
       - name: Cache Node.js Dependencies
         uses: actions/cache@v4
@@ -198,6 +198,11 @@ jobs:
         uses: TriPSs/conventional-changelog-action@v3
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          skip-commit: 'true'
+          skip-version-file: 'true'
+          skip-git-pull: 'true'
+          git-push: 'false'
+          output-file: 'false'
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -212,9 +217,10 @@ jobs:
           find artifacts -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.dmg" \) -exec cp {} release-assets/ \; || true
           
           if [ -d "artifacts/Tauri Build Artifacts (macos-latest)/src-tauri/target/release/bundle/macos" ]; then
-            cd "artifacts/Tauri Build Artifacts (macos-latest)/src-tauri/target/release/bundle/macos"
+            MACOS_BUNDLE_DIR="artifacts/Tauri Build Artifacts (macos-latest)/src-tauri/target/release/bundle/macos"
+            cd "$MACOS_BUNDLE_DIR"
             for app in *.app; do
-              zip -r "../../../release-assets/${app%.app}.zip" "$app"
+              zip -r "$GITHUB_WORKSPACE/release-assets/${app%.app}.zip" "$app"
             done
             cd -
           fi
@@ -241,7 +247,7 @@ jobs:
           echo "Creating release: $NEW_VERSION"
           
           CHANGELOG_NOTES_FILE="RELEASE_NOTES.md"
-          printf "%s\n" "${{ steps.changelog.outputs.changelog }}" > "$CHANGELOG_NOTES_FILE"
+          echo '${{ steps.changelog.outputs.changelog }}' > "$CHANGELOG_NOTES_FILE"
           
           gh release create "$NEW_VERSION" \
             --title "CircuitVerse Desktop $NEW_VERSION" \
