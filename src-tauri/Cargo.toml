@@ -1,6 +1,6 @@
 [package]
 name = "CircuitVerse"
-version = "5.0.0"
+version = "7.0.0"
 description = "CircuitVerse Simulator"
 authors = ["CircuitVerse Team"]
 license = ""
